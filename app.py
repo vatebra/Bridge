@@ -1,28 +1,68 @@
+import os
+import re
+import base64
 from flask import Flask, request, Response
-from flask_cors import CORS # Must install via pip install flask-cors
 import requests
 
 app = Flask(__name__)
-# This line fixes the 'NetworkError' by allowing your browser to talk to the bridge
-CORS(app) 
 
-@app.route('/bridge', methods=['POST'])
-def bridge():
-    waec_url = "https://ghana.waecdirect.org/DisplayResults.aspx"
-    payload = request.form.to_dict()
+@app.route('/check', methods=['POST'])
+def proxy_waec():
+    session = requests.Session()
     
     headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Referer': 'https://ghana.waecdirect.org/Default.aspx',
-        'Origin': 'https://ghana.waecdirect.org'
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://ghana.waecdirect.org/index.htm",
+        "Origin": "https://ghana.waecdirect.org",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    }
+
+    data = request.form.to_dict()
+    payload = {
+        **data,
+        "ccandid": data.get("candid"),
+        "cexamyear": data.get("examyear"),
+        "referpage": "index.htm",
+        "submit": "Submit"
     }
 
     try:
-        # High timeout for slow WAEC Ghana servers
-        response = requests.post(waec_url, data=payload, headers=headers, timeout=60)
-        return Response(response.text, mimetype='text/html')
+        # Step 1: Establish Session
+        session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
+
+        # Step 2: Post to get results
+        waec_url = "https://ghana.waecdirect.org/results.asp"
+        response = session.post(waec_url, data=payload, headers=headers, timeout=45)
+        response.encoding = 'utf-8'
+        html = response.text
+
+        # Step 3: HARDEN THE QR CODE (The Loophole Fix)
+        # Find the QR code path (either /qrcode2/... or QRCode.ashx)
+        qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
+        
+        if qr_match:
+            qr_relative_url = qr_match.group(1)
+            qr_full_url = f"https://ghana.waecdirect.org/{qr_relative_url}"
+            
+            try:
+                # Download the actual image bytes
+                img_res = session.get(qr_full_url, headers=headers, timeout=10)
+                if img_res.status_code == 200:
+                    # Convert image to Base64
+                    b64_img = base64.b64encode(img_res.content).decode('utf-8')
+                    data_uri = f"data:image/png;base64,{b64_img}"
+                    
+                    # Replace the dynamic URL with the permanent Base64 string
+                    html = html.replace(qr_relative_url, data_uri)
+            except Exception:
+                pass # If QR download fails, keep original HTML
+
+        # Return the modified "Permanent" HTML to WordPress
+        return Response(html, mimetype='text/html')
+
     except Exception as e:
-        return f"Bridge Connection Failed: {str(e)}", 500
+        return f"Bridge Error: {str(e)}", 500
 
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
