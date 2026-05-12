@@ -1,10 +1,10 @@
 from flask import Flask, request, Response
-from flask_cors import CORS
+from flask_cors import CORS # Must install via pip install flask-cors
 import requests
 
 app = Flask(__name__)
-# Allows your browser to communicate with this bridge without security blocks
-CORS(app)
+# This line fixes the 'NetworkError' by allowing your browser to talk to the bridge
+CORS(app) 
 
 @app.route('/bridge', methods=['POST'])
 def bridge():
@@ -18,12 +18,8 @@ def bridge():
     }
 
     try:
-        # Fetch the result from WAEC with a high timeout for slow servers
+        # High timeout for slow WAEC Ghana servers
         response = requests.post(waec_url, data=payload, headers=headers, timeout=60)
-        
-        if response.status_code != 200:
-            return f"WAEC Server Error: {response.status_code}", 500
-            
         return Response(response.text, mimetype='text/html')
     except Exception as e:
         return f"Bridge Connection Failed: {str(e)}", 500
