@@ -3,7 +3,7 @@ from flask_cors import CORS
 import requests
 
 app = Flask(__name__)
-# Allows your WordPress domain to communicate with this bridge
+# CRITICAL: Allow your WordPress domain to talk to the bridge
 CORS(app)
 
 @app.route('/bridge', methods=['POST'])
@@ -18,8 +18,10 @@ def bridge():
     }
 
     try:
-        # Fetch the result from WAEC
+        # Step 1: Bridge fetches from WAEC
         response = requests.post(waec_url, data=payload, headers=headers, timeout=45)
+        
+        # Step 2: Return raw HTML to browser
         return Response(response.text, mimetype='text/html')
     except Exception as e:
         return str(e), 500
