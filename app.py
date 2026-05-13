@@ -1,53 +1,77 @@
 import os
-import re
 import base64
-from flask import Flask, request, jsonify
-import requests
+import asyncio
+from flask import Flask, request, Response
+from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 
 app = Flask(__name__)
 
-@app.route('/fetch_and_return', methods=['POST'])
-def fetch_and_return():
-    session = requests.Session()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://ghana.waecdirect.org/index.htm",
-        "Origin": "https://ghana.waecdirect.org",
-    }
-    
+async def fetch_waec_stealth(payload):
+    async with async_playwright() as p:
+        # Launch Chromium in headless mode
+        browser = await p.chromium.launch(headless=True)
+        # Use a high-quality User-Agent
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+        
+        page = await context.new_page()
+        # Apply the Stealth Plugin
+        await stealth_async(page)
+
+        try:
+            # Go to the landing page to drop initial cookies
+            await page.goto("https://ghana.waecdirect.org/index.htm", wait_until="networkidle")
+
+            # Fill the form fields directly into the browser DOM
+            await page.fill('input[name="candid"]', payload.get("candid"))
+            await page.select_option('select[name="examyear"]', payload.get("examyear"))
+            await page.select_option('select[name="examtype"]', payload.get("examtype", "01"))
+            await page.fill('input[name="serial"]', payload.get("serial"))
+            await page.fill('input[name="pin"]', payload.get("pin"))
+
+            # Click submit and wait for the results page to fully stabilize
+            # This is where the "Exception" usually happens—but not here.
+            await asyncio.gather(
+                page.click('input[id="Submit"]'),
+                page.wait_for_load_state("networkidle")
+            )
+
+            # Extract the HTML content after the browser has rendered it
+            full_html = await page.content()
+
+            # Logic to find and Base64 encode the QR code inside the browser
+            # This is more reliable than re-requesting the image bytes
+            qr_data_uri = await page.evaluate("""() => {
+                const img = document.querySelector('img[src*="qrcode2"], img[src*="QRCode"]');
+                if (!img) return null;
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                return canvas.toDataURL('image/png');
+            }""")
+
+            if qr_data_uri:
+                # Replace the relative source with the permanent Base64 URI
+                full_html = full_html.replace('src="qrcode2/', f'src="{qr_data_uri}"')
+
+            return full_html
+
+        finally:
+            await browser.close()
+
+@app.route('/check', methods=['POST'])
+def proxy_waec():
     data = request.form.to_dict()
-    payload = {
-        **data,
-        "ccandid": data.get("candid"),
-        "cexamyear": data.get("examyear"),
-        "referpage": "index.htm",
-        "submit": "Submit"
-    }
-    
     try:
-        session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
-        response = session.post("https://ghana.waecdirect.org/results.asp", data=payload, headers=headers, timeout=45)
-        response.encoding = 'utf-8'
-        html = response.text
-        
-        # Embed QR code as base64
-        qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
-        if qr_match:
-            qr_url = f"https://ghana.waecdirect.org/{qr_match.group(1)}"
-            try:
-                img_res = session.get(qr_url, headers=headers, timeout=10)
-                if img_res.status_code == 200:
-                    b64 = base64.b64encode(img_res.content).decode('utf-8')
-                    html = html.replace(qr_match.group(1), f"data:image/png;base64,{b64}")
-            except:
-                pass
-        
-        if 'Candidate Name' in html:
-            return jsonify({'success': True, 'html': html})
-        else:
-            return jsonify({'success': False, 'error': 'Invalid result'})
+        # Run the async Playwright function
+        html = asyncio.run(fetch_waec_stealth(data))
+        return Response(html, mimetype='text/html')
     except Exception as e:
-        return jsonify({'success': False, 'error': str(e)})
+        return f"Bridge Stealth Error: {str(e)}", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
