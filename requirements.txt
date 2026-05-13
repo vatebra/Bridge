@@ -1,3 +1,5 @@
 flask
-requests
-gunicorn 
+flask-cors
+playwright
+playwright-stealth
+gunicorn
