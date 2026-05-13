@@ -1,12 +1,10 @@
 import os
 import re
 import base64
-import requests
 from flask import Flask, request, Response
-from flask_cors import CORS
+import requests
 
 app = Flask(__name__)
-CORS(app) # Crucial for cross-domain requests from WordPress
 
 @app.route('/check', methods=['POST'])
 def proxy_waec():
@@ -16,53 +14,55 @@ def proxy_waec():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": "https://ghana.waecdirect.org/index.htm",
         "Origin": "https://ghana.waecdirect.org",
-        "Content-Type": "application/x-www-form-urlencoded"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     }
 
     data = request.form.to_dict()
-    
-    # WAEC internal structure requires duplicated fields for verification
     payload = {
-        "candid": data.get("candid"),
+        **data,
         "ccandid": data.get("candid"),
-        "examyear": data.get("examyear"),
         "cexamyear": data.get("examyear"),
-        "examtype": data.get("examtype"),
-        "cexamtype": data.get("examtype"),
-        "serial": data.get("serial"),
-        "pin": data.get("pin"),
         "referpage": "index.htm",
         "submit": "Submit"
     }
 
     try:
-        # Get cookies
-        session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=10)
+        # Step 1: Establish Session
+        session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
 
-        # Post data
-        response = session.post("https://ghana.waecdirect.org/results.asp", data=payload, headers=headers, timeout=30)
+        # Step 2: Post to get results
+        waec_url = "https://ghana.waecdirect.org/results.asp"
+        response = session.post(waec_url, data=payload, headers=headers, timeout=45)
+        response.encoding = 'utf-8'
         html = response.text
 
-        # Inject Base URL so images/styles load from WAEC
-        html = '<base href="https://ghana.waecdirect.org/">' + html
-
-        # Base64 QR Code Fix
-        qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png|QRCode\.ashx[^"\']+)["\']', html)
+        # Step 3: HARDEN THE QR CODE (The Loophole Fix)
+        # Find the QR code path (either /qrcode2/... or QRCode.ashx)
+        qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
+        
         if qr_match:
-            qr_url = f"https://ghana.waecdirect.org/{qr_match.group(1)}"
+            qr_relative_url = qr_match.group(1)
+            qr_full_url = f"https://ghana.waecdirect.org/{qr_relative_url}"
+            
             try:
-                img_res = session.get(qr_url, headers=headers, timeout=5)
+                # Download the actual image bytes
+                img_res = session.get(qr_full_url, headers=headers, timeout=10)
                 if img_res.status_code == 200:
-                    b64 = base64.b64encode(img_res.content).decode('utf-8')
-                    html = html.replace(qr_match.group(1), f"data:image/png;base64,{b64}")
-            except: pass
+                    # Convert image to Base64
+                    b64_img = base64.b64encode(img_res.content).decode('utf-8')
+                    data_uri = f"data:image/png;base64,{b64_img}"
+                    
+                    # Replace the dynamic URL with the permanent Base64 string
+                    html = html.replace(qr_relative_url, data_uri)
+            except Exception:
+                pass # If QR download fails, keep original HTML
 
+        # Return the modified "Permanent" HTML to WordPress
         return Response(html, mimetype='text/html')
 
     except Exception as e:
         return f"Bridge Error: {str(e)}", 500
 
 if __name__ == "__main__":
-    # Ensure it listens on the port provided by Render
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
