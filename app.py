@@ -7,12 +7,12 @@ from playwright.async_api import async_playwright
 import playwright_stealth
 
 app = Flask(__name__)
-# Replace '*' with your actual domain for better security
+# Enable CORS for your WordPress domain
 CORS(app) 
 
 async def fetch_waec_stealth(payload):
     async with async_playwright() as p:
-        # Added --no-sandbox and other flags necessary for Render/Linux
+        # Launch with required flags for Linux/Render environments
         browser = await p.chromium.launch(
             headless=True, 
             args=[
@@ -26,31 +26,30 @@ async def fetch_waec_stealth(payload):
         )
         page = await context.new_page()
         
-        # FIX: Bulletproof Stealth Initialization
-        # Some versions use 'stealth_async', others use 'stealth'. This checks for both.
+        # FIX: Corrected Stealth Initialization
+        # This checks if the specific function exists to avoid 'module object not callable'
         if hasattr(playwright_stealth, 'stealth_async'):
             await playwright_stealth.stealth_async(page)
-        else:
-            from playwright_stealth import stealth
-            await stealth(page)
+        elif hasattr(playwright_stealth, 'stealth'):
+            # Fallback for versions where 'stealth' works for both
+            await playwright_stealth.stealth(page)
 
         try:
-            # Step 1: Visit home to get real session cookies
+            # Step 1: Visit home to establish session cookies
             await page.goto("https://ghana.waecdirect.org/index.htm", wait_until="networkidle", timeout=60000)
 
-            # Step 2: Fill the form
+            # Step 2: Fill the form using provided payload
             await page.fill('input[name="candid"]', payload.get("candid", ""))
             await page.select_option('select[name="examyear"]', payload.get("examyear", ""))
             await page.select_option('select[name="examtype"]', payload.get("examtype", "01"))
             await page.fill('input[name="serial"]', payload.get("serial", ""))
             await page.fill('input[name="pin"]', payload.get("pin", ""))
 
-            # Step 3: Click and wait for results
-            # Note: WAEC uses a traditional form submit, wait_for_load_state is appropriate
+            # Step 3: Click Submit and wait for the result page to load
             await page.click('input[id="Submit"]')
             await page.wait_for_load_state("networkidle", timeout=60000)
 
-            # Step 4: Handle QR Code (Convert to Base64)
+            # Step 4: Handle QR Code (Convert to Base64 to make it permanent)
             qr_uri = await page.evaluate("""() => {
                 const img = document.querySelector('img[src*="qrcode2"], img[src*="QRCode"]');
                 if (!img) return null;
@@ -64,7 +63,7 @@ async def fetch_waec_stealth(payload):
 
             html = await page.content()
             if qr_uri:
-                # Regex fix for multiple possible QR source patterns
+                # Replace the temporary WAEC image source with our permanent Base64 string
                 html = re.sub(r'src=["\'](qrcode2/[^"\']+\.png|QRCode\.ashx[^"\']+)["\']', f'src="{qr_uri}"', html)
 
             return html
@@ -77,7 +76,7 @@ async def fetch_waec_stealth(payload):
 def proxy_waec():
     data = request.form.to_dict()
     try:
-        # Use a more robust loop handling for Flask
+        # Create a fresh event loop for each request to prevent event loop issues in Flask
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         html = loop.run_until_complete(fetch_waec_stealth(data))
@@ -87,6 +86,6 @@ def proxy_waec():
         return f"Bridge Error: {str(e)}", 500
 
 if __name__ == "__main__":
-    # Render uses the PORT environment variable
+    # Render binds to the PORT environment variable (default 10000)
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
