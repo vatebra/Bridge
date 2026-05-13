@@ -36,8 +36,15 @@ def proxy_waec():
         response.encoding = 'utf-8'
         html = response.text
 
-        # Step 3: HARDEN THE QR CODE (The Loophole Fix)
-        # Find the QR code path (either /qrcode2/... or QRCode.ashx)
+        # Step 3: Replace your domain with WAEC official URL (Fixes the top right link)
+        my_domain = "waecghresults.com"
+        waec_official_url = "https://ghana.waecdirect.org/displayresults.asp"
+        
+        html = html.replace(f"https://{my_domain}", waec_official_url)
+        html = html.replace(f"http://{my_domain}", waec_official_url)
+        html = html.replace(f"//{my_domain}", waec_official_url)
+
+        # Step 4: HARDEN THE QR CODE (The Loophole Fix)
         qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
         
         if qr_match:
@@ -45,19 +52,15 @@ def proxy_waec():
             qr_full_url = f"https://ghana.waecdirect.org/{qr_relative_url}"
             
             try:
-                # Download the actual image bytes
                 img_res = session.get(qr_full_url, headers=headers, timeout=10)
                 if img_res.status_code == 200:
-                    # Convert image to Base64
                     b64_img = base64.b64encode(img_res.content).decode('utf-8')
                     data_uri = f"data:image/png;base64,{b64_img}"
-                    
-                    # Replace the dynamic URL with the permanent Base64 string
                     html = html.replace(qr_relative_url, data_uri)
             except Exception:
-                pass # If QR download fails, keep original HTML
+                pass
 
-        # Return the modified "Permanent" HTML to WordPress
+        # Return the modified HTML to WordPress
         return Response(html, mimetype='text/html')
 
     except Exception as e:
