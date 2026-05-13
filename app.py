@@ -20,17 +20,18 @@ def proxy_waec():
         "Content-Type": "application/x-www-form-urlencoded"
     }
 
-    # Get data from your WordPress AceOdds form
+    # Get data from AceOdds form
     data = request.form.to_dict()
     
-    # EXACT PAYLOAD MAPPING: 
-    # WAEC uses 'candid' for the input name but 'ccandid' for the processing logic
+    # WAEC requires both the name 'candid' and 'ccandid' to be identical
+    # and requires numerical codes for 'examtype'
     payload = {
         "candid": data.get("candid"),
         "ccandid": data.get("candid"),
         "examyear": data.get("examyear"),
         "cexamyear": data.get("examyear"),
-        "examtype": data.get("examtype", "01"),
+        "examtype": data.get("examtype"),
+        "cexamtype": data.get("examtype"),
         "serial": data.get("serial"),
         "pin": data.get("pin"),
         "referpage": "index.htm",
@@ -38,23 +39,19 @@ def proxy_waec():
     }
 
     try:
-        # Step 1: Initialize cookies
+        # Step 1: Hit the home page to get the valid session cookie
         session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
 
-        # Step 2: Post data
+        # Step 2: Post to results.asp
         waec_url = "https://ghana.waecdirect.org/results.asp"
         response = session.post(waec_url, data=payload, headers=headers, timeout=45)
-        
-        # Ensure we handle the encoding for Ghanaian characters if any
         response.encoding = 'utf-8'
         html = response.text
 
-        # --- FIXES ---
-
-        # 1. Inject Base URL to fix the destination/branding issue
+        # BRANDING FIX: Inject base tag for AceOdds
         html = '<base href="https://ghana.waecdirect.org/">' + html
 
-        # 2. Permanent QR Code Fix
+        # PERMANENT QR CODE FIX: Convert to Base64
         qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png|QRCode\.ashx[^"\']+)["\']', html)
         if qr_match:
             qr_relative_url = qr_match.group(1)
