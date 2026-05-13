@@ -10,52 +10,51 @@ CORS(app)
 
 async def fetch_waec_manual_stealth(payload):
     async with async_playwright() as p:
-        # Launch with flags for Render/Linux and hide automation
+        # Launching with 'manual stealth' flags to bypass WAEC's bot detection
         browser = await p.chromium.launch(
             headless=True, 
             args=[
                 "--no-sandbox", 
                 "--disable-setuid-sandbox", 
+                "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled"
             ]
         )
         
-        # Set a standard desktop fingerprint
+        # Mimic a real Ghanaian student's browser profile
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 800}
+            viewport={'width': 1280, 'height': 800},
+            locale="en-GB"
         )
         
         page = await context.new_page()
 
         try:
-            # Step 1: Visit home - Use 'domcontentloaded' to avoid waiting for slow tracking pixels
-            print("Navigating to WAEC...")
+            # 1. Navigation with longer timeout for WAEC's server speed
             await page.goto("https://ghana.waecdirect.org/index.htm", wait_until="domcontentloaded", timeout=90000)
 
-            # Step 2: Explicitly wait for the input field to be ready
-            # This fixes the "Page.fill: Timeout" error
-            print("Waiting for form fields...")
+            # 2. Wait for the candid input field to ensure page is ready
             await page.wait_for_selector('input[name="candid"]', state="visible", timeout=60000)
 
-            # Step 3: Fill form
+            # 3. Fill the student's data from your WordPress site
             await page.fill('input[name="candid"]', payload.get("candid", ""))
             await page.select_option('select[name="examyear"]', payload.get("examyear", ""))
             await page.select_option('select[name="examtype"]', payload.get("examtype", "01"))
             await page.fill('input[name="serial"]', payload.get("serial", ""))
             await page.fill('input[name="pin"]', payload.get("pin", ""))
 
-            # Step 4: Submit and wait for the results page
-            print("Submitting form...")
+            # 4. Submit and wait for the result page
             await page.click('input[id="Submit"]')
-            
-            # Wait for the results content to load
             await page.wait_for_load_state("networkidle", timeout=90000)
 
-            # Step 5: Inject Base URL and fix QR Code
+            # 5. Fix Branding: Inject WAEC Base URL and convert QR code
             html = await page.content()
+            
+            # This ensures the link 'appears' as WAEC on the result slip
             base_tag = '<base href="https://ghana.waecdirect.org/">'
             
+            # Convert QR to Base64 so it never expires on your site
             qr_uri = await page.evaluate("""() => {
                 const img = document.querySelector('img[src*="qrcode2"], img[src*="QRCode"]');
                 if (!img) return null;
@@ -71,9 +70,6 @@ async def fetch_waec_manual_stealth(payload):
                 html = re.sub(r'src=["\'](qrcode2/[^"\']+\.png|QRCode\.ashx[^"\']+)["\']', f'src="{qr_uri}"', html)
 
             return base_tag + html
-        except Exception as e:
-            # Re-raise the exception to be caught by the Flask route
-            raise e
         finally:
             await browser.close()
 
@@ -87,7 +83,6 @@ def proxy_waec():
         loop.close()
         return Response(html, mimetype='text/html')
     except Exception as e:
-        # Logs the specific error type (e.g., TimeoutError)
         return f"Bridge Error: {type(e).__name__} - {str(e)}", 500
 
 if __name__ == "__main__":
