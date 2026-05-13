@@ -1,27 +1,30 @@
-# Use the official Microsoft Playwright image as the base
-# This image comes pre-loaded with Python, Chromium, and all system dependencies
+# 1. Use the Playwright image that matches our requirements
 FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
 
-# Set the working directory inside the container
+# 2. Set the working directory
 WORKDIR /app
 
-# Copy the requirements file first to leverage Docker's caching
+# 3. Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
+# 4. Install Python dependencies
+# Using --no-cache-dir keeps the image size smaller
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of your application code (app.py, etc.)
+# 5. CRITICAL FIX: Install the Chromium browser binaries
+# This solves the "Executable doesn't exist" error you saw
+RUN playwright install chromium
+
+# 6. Copy the rest of your app code
 COPY . .
 
-# Set environment variables
-# Render typically uses port 10000 for Docker services
+# 7. Environment Variables
 ENV PORT=10000
 ENV PYTHONUNBUFFERED=1
 
-# Expose the port for external access
+# 8. Expose the port
 EXPOSE 10000
 
-# Start the application using Gunicorn
-# Timeout is increased to 120s to allow the browser time to process the WAEC result
+# 9. Start the app
+# Increased timeout to 120s to handle the slow WAEC portal response
 CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "app:app"]
