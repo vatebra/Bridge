@@ -1,67 +1,98 @@
 import os
 import re
 import base64
-from flask import Flask, request, Response
+from flask import Flask, request, jsonify
 import requests
 
 app = Flask(__name__)
 
-@app.route('/check', methods=['POST'])
-def proxy_waec():
-    session = requests.Session()
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://ghana.waecdirect.org/index.htm",
-        "Origin": "https://ghana.waecdirect.org",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
-    }
+WAEC_BASE_URL = "https://ghana.waecdirect.org"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
+def get_session():
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive",
+    })
+    return session
+
+def embed_qr_code(session, html):
+    qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
+    if qr_match:
+        qr_url = f"{WAEC_BASE_URL}/{qr_match.group(1)}"
+        try:
+            img_res = session.get(qr_url, timeout=10)
+            if img_res.status_code == 200:
+                b64 = base64.b64encode(img_res.content).decode('utf-8')
+                html = html.replace(qr_match.group(1), f"data:image/png;base64,{b64}")
+        except:
+            pass
+    return html
+
+def fix_paths(html):
+    replacements = [
+        ('src="/', f'src="{WAEC_BASE_URL}/'),
+        ('href="/', f'href="{WAEC_BASE_URL}/'),
+        ('src="./', f'src="{WAEC_BASE_URL}/'),
+        ('href="./', f'href="{WAEC_BASE_URL}/'),
+    ]
+    for old, new in replacements:
+        html = html.replace(old, new)
+    return html
+
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy"})
+
+@app.route('/fetch', methods=['POST'])
+def fetch():
+    session = get_session()
+    
     data = request.form.to_dict()
+    
     payload = {
-        **data,
-        "ccandid": data.get("candid"),
-        "cexamyear": data.get("examyear"),
+        "candid": data.get("candid", ""),
+        "examtype": data.get("examtype", ""),
+        "examyear": data.get("examyear", ""),
+        "serial": data.get("serial", ""),
+        "pin": data.get("pin", ""),
+        "ccandid": data.get("candid", ""),
+        "cexamyear": data.get("examyear", ""),
         "referpage": "index.htm",
         "submit": "Submit"
     }
-
+    
     try:
-        # Step 1: Establish Session
-        session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
-
-        # Step 2: Post to get results
-        waec_url = "https://ghana.waecdirect.org/results.asp"
-        response = session.post(waec_url, data=payload, headers=headers, timeout=45)
+        session.get(f"{WAEC_BASE_URL}/index.htm", timeout=15)
+        response = session.post(f"{WAEC_BASE_URL}/results.asp", data=payload, timeout=45)
         response.encoding = 'utf-8'
         html = response.text
-
-        # Step 3: HARDEN THE QR CODE (The Loophole Fix)
-        # Find the QR code path (either /qrcode2/... or QRCode.ashx)
-        qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
         
-        if qr_match:
-            qr_relative_url = qr_match.group(1)
-            qr_full_url = f"https://ghana.waecdirect.org/{qr_relative_url}"
+        html = fix_paths(html)
+        html = embed_qr_code(session, html)
+        
+        if "Candidate Name" in html or "Results" in html:
+            return jsonify({"success": True, "html": html})
+        else:
+            return jsonify({"success": False, "error": "No result found"})
             
-            try:
-                # Download the actual image bytes
-                img_res = session.get(qr_full_url, headers=headers, timeout=10)
-                if img_res.status_code == 200:
-                    # Convert image to Base64
-                    b64_img = base64.b64encode(img_res.content).decode('utf-8')
-                    data_uri = f"data:image/png;base64,{b64_img}"
-                    
-                    # Replace the dynamic URL with the permanent Base64 string
-                    html = html.replace(qr_relative_url, data_uri)
-            except Exception:
-                pass # If QR download fails, keep original HTML
-
-        # Return the modified "Permanent" HTML to WordPress
-        return Response(html, mimetype='text/html')
-
     except Exception as e:
-        return f"Bridge Error: {str(e)}", 500
+        return jsonify({"success": False, "error": str(e)})
+
+@app.route('/check', methods=['POST'])
+def check():
+    return fetch()
+
+@app.route('/fetch_and_return', methods=['POST'])
+def fetch_and_return():
+    return fetch()
+
+@app.route('/', methods=['GET'])
+def index():
+    return jsonify({"service": "WAEC Bridge", "status": "running"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
