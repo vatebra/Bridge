@@ -38,6 +38,7 @@ def fix_paths(html):
         ('href="/', f'href="{WAEC_BASE_URL}/'),
         ('src="./', f'src="{WAEC_BASE_URL}/'),
         ('href="./', f'href="{WAEC_BASE_URL}/'),
+        ('src="images/', f'src="{WAEC_BASE_URL}/images/'),
     ]
     for old, new in replacements:
         html = html.replace(old, new)
@@ -45,7 +46,7 @@ def fix_paths(html):
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "healthy"})
+    return jsonify({"status": "healthy", "service": "waec-bridge"})
 
 @app.route('/fetch', methods=['POST'])
 def fetch():
@@ -77,8 +78,12 @@ def fetch():
         if "Candidate Name" in html or "Results" in html:
             return jsonify({"success": True, "html": html})
         else:
-            return jsonify({"success": False, "error": "No result found"})
+            return jsonify({"success": False, "error": "Invalid credentials or no result found"})
             
+    except requests.exceptions.Timeout:
+        return jsonify({"success": False, "error": "Request timeout. Please try again."})
+    except requests.exceptions.ConnectionError:
+        return jsonify({"success": False, "error": "Cannot connect to WAEC server"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -92,7 +97,7 @@ def fetch_and_return():
 
 @app.route('/', methods=['GET'])
 def index():
-    return jsonify({"service": "WAEC Bridge", "status": "running"})
+    return jsonify({"service": "WAEC Bridge", "status": "running", "endpoints": ["/fetch", "/check", "/health"]})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
