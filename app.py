@@ -4,7 +4,8 @@ import re
 from flask import Flask, request, Response
 from flask_cors import CORS
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+# FIX: Changed stealth_async to stealth_page based on your Render logs
+from playwright_stealth import stealth_page
 
 app = Flask(__name__)
 CORS(app) # Bypasses CORS so your WordPress site can talk to this bridge
@@ -17,7 +18,9 @@ async def fetch_waec_stealth(payload):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
-        await stealth_async(page) # Hides the fact that this is a bot
+        
+        # FIX: Using the correct function name for the latest library version
+        await stealth_page(page) 
 
         try:
             # Step 1: Visit home to get real session cookies
