@@ -1,13 +1,15 @@
 import os
 import re
 import base64
-from flask import Flask, request, jsonify
 import requests
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)  # Crucial: Allows your WordPress site to access the bridge
 
 WAEC_BASE_URL = "https://ghana.waecdirect.org"
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 def get_session():
     session = requests.Session()
@@ -44,14 +46,9 @@ def fix_paths(html):
         html = html.replace(old, new)
     return html
 
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "healthy", "service": "waec-bridge"})
-
 @app.route('/fetch', methods=['POST'])
-def fetch():
+def fetch_results():
     session = get_session()
-    
     data = request.form.to_dict()
     
     payload = {
@@ -67,37 +64,29 @@ def fetch():
     }
     
     try:
+        # Establish session cookies
         session.get(f"{WAEC_BASE_URL}/index.htm", timeout=15)
+        
+        # Post to result engine
         response = session.post(f"{WAEC_BASE_URL}/results.asp", data=payload, timeout=45)
         response.encoding = 'utf-8'
         html = response.text
         
+        # Clean up and embed assets
         html = fix_paths(html)
         html = embed_qr_code(session, html)
         
         if "Candidate Name" in html or "Results" in html:
             return jsonify({"success": True, "html": html})
         else:
-            return jsonify({"success": False, "error": "Invalid credentials or no result found"})
+            return jsonify({"success": False, "error": "Invalid credentials or result not found."})
             
-    except requests.exceptions.Timeout:
-        return jsonify({"success": False, "error": "Request timeout. Please try again."})
-    except requests.exceptions.ConnectionError:
-        return jsonify({"success": False, "error": "Cannot connect to WAEC server"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
-@app.route('/check', methods=['POST'])
-def check():
-    return fetch()
-
-@app.route('/fetch_and_return', methods=['POST'])
-def fetch_and_return():
-    return fetch()
-
-@app.route('/', methods=['GET'])
-def index():
-    return jsonify({"service": "WAEC Bridge", "status": "running", "endpoints": ["/fetch", "/check", "/health"]})
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "healthy"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
