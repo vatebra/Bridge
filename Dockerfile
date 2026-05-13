@@ -1,19 +1,12 @@
-FROM python:3.10-slim
-
-# Prevent Python from buffering stdout/stderr
-ENV PYTHONUNBUFFERED 1
+FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy and install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application code
-COPY . .
+COPY app.py .
 
-# Set the port to 10000 (Render's default)
-EXPOSE 10000
+EXPOSE 5000
 
-# Run with Gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
