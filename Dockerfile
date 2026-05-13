@@ -1,30 +1,37 @@
-# 1. Use the Playwright image that matches our requirements
-FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+# Use an official Python runtime as a parent image
+FROM python:3.10-slim
 
-# 2. Set the working directory
+# Set environment variables to prevent Python from writing pyc files and buffering stdout/stderr
+ENV PYTHONDONTWRITEBYTECODE 1
+ENV PYTHONUNBUFFERED 1
+
+# Set the working directory in the container
 WORKDIR /app
 
-# 3. Copy requirements first for better caching
+# Install system dependencies needed for Playwright and Chromium
+# These are essential to avoid 'browser type not found' or execution errors
+RUN apt-get update && apt-get install -y \
+    wget \
+    gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the requirements file into the container
 COPY requirements.txt .
 
-# 4. Install Python dependencies
-# Using --no-cache-dir keeps the image size smaller
+# Install Python dependencies
+# Note: Ensure playwright-stealth is REMOVED from your requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. CRITICAL FIX: Install the Chromium browser binaries
-# This solves the "Executable doesn't exist" error you saw
+# Install Playwright browser and its specific system-level dependencies
+# This replaces the 'manual' build command in the Render dashboard
 RUN playwright install chromium
+RUN playwright install-deps chromium
 
-# 6. Copy the rest of your app code
+# Copy the rest of your application code
 COPY . .
 
-# 7. Environment Variables
-ENV PORT=10000
-ENV PYTHONUNBUFFERED=1
-
-# 8. Expose the port
+# Expose the port Flask/Gunicorn will run on
 EXPOSE 10000
 
-# 9. Start the app
-# Increased timeout to 120s to handle the slow WAEC portal response
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--timeout", "120", "app:app"]
+# Start the application using Gunicorn for better production performance
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "app:app"]
