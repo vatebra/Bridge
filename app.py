@@ -4,9 +4,7 @@ import re
 from flask import Flask, request, Response
 from flask_cors import CORS
 from playwright.async_api import async_playwright
-
-# FIX: Import ONLY 'stealth'. This resolves the ImportError from Screenshot 2026-05-12 at 18-54-40
-from playwright_stealth import stealth
+import playwright_stealth
 
 app = Flask(__name__)
 CORS(app) 
@@ -22,28 +20,44 @@ async def fetch_waec_stealth(payload):
         )
         page = await context.new_page()
         
-        # APPLY STEALTH: Use the direct function call
-        await stealth(page)
+        # 100% EXPLICIT STEALTH CALL
+        # We access the function directly from the module to avoid the "not callable" error
+        await playwright_stealth.stealth(page)
 
         try:
-            # Navigation and Form Filling
+            # Step 1: Establish session
             await page.goto("https://ghana.waecdirect.org/index.htm", wait_until="networkidle", timeout=60000)
-            
+
+            # Step 2: Fill the form
             await page.fill('input[name="candid"]', payload.get("candid", ""))
             await page.select_option('select[name="examyear"]', payload.get("examyear", ""))
             await page.select_option('select[name="examtype"]', payload.get("examtype", "01"))
             await page.fill('input[name="serial"]', payload.get("serial", ""))
             await page.fill('input[name="pin"]', payload.get("pin", ""))
 
+            # Step 3: Submit and wait
             await page.click('input[id="Submit"]')
             await page.wait_for_load_state("networkidle", timeout=60000)
 
-            # Capture Content
+            # Step 4: Inject Base URL so images and destination links appear authentic
             html = await page.content()
-            
-            # Injection to show the WAEC URL destination in the result slip
-            # This helps the slip look authentic
             base_tag = '<base href="https://ghana.waecdirect.org/">'
+            
+            # Convert QR Code to permanent Base64
+            qr_uri = await page.evaluate("""() => {
+                const img = document.querySelector('img[src*="qrcode2"], img[src*="QRCode"]');
+                if (!img) return null;
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                return canvas.toDataURL('image/png');
+            }""")
+
+            if qr_uri:
+                html = re.sub(r'src=["\'](qrcode2/[^"\']+\.png|QRCode\.ashx[^"\']+)["\']', f'src="{qr_uri}"', html)
+
             return base_tag + html
         finally:
             await browser.close()
@@ -58,7 +72,8 @@ def proxy_waec():
         loop.close()
         return Response(html, mimetype='text/html')
     except Exception as e:
-        return f"Bridge Error: {str(e)}", 500
+        # Detailed error reporting to identify exactly where it fails
+        return f"Bridge Error: {type(e).__name__} - {str(e)}", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
