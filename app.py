@@ -1,90 +1,81 @@
 import os
-import asyncio
 import re
+import base64
 from flask import Flask, request, Response
 from flask_cors import CORS
-from playwright.async_api import async_playwright
+import requests
 
 app = Flask(__name__)
-CORS(app) 
-
-async def fetch_waec_manual_stealth(payload):
-    async with async_playwright() as p:
-        # Launching with 'manual stealth' flags to bypass WAEC's bot detection
-        browser = await p.chromium.launch(
-            headless=True, 
-            args=[
-                "--no-sandbox", 
-                "--disable-setuid-sandbox", 
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled"
-            ]
-        )
-        
-        # Mimic a real Ghanaian student's browser profile
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={'width': 1280, 'height': 800},
-            locale="en-GB"
-        )
-        
-        page = await context.new_page()
-
-        try:
-            # 1. Navigation with longer timeout for WAEC's server speed
-            await page.goto("https://ghana.waecdirect.org/index.htm", wait_until="domcontentloaded", timeout=90000)
-
-            # 2. Wait for the candid input field to ensure page is ready
-            await page.wait_for_selector('input[name="candid"]', state="visible", timeout=60000)
-
-            # 3. Fill the student's data from your WordPress site
-            await page.fill('input[name="candid"]', payload.get("candid", ""))
-            await page.select_option('select[name="examyear"]', payload.get("examyear", ""))
-            await page.select_option('select[name="examtype"]', payload.get("examtype", "01"))
-            await page.fill('input[name="serial"]', payload.get("serial", ""))
-            await page.fill('input[name="pin"]', payload.get("pin", ""))
-
-            # 4. Submit and wait for the result page
-            await page.click('input[id="Submit"]')
-            await page.wait_for_load_state("networkidle", timeout=90000)
-
-            # 5. Fix Branding: Inject WAEC Base URL and convert QR code
-            html = await page.content()
-            
-            # This ensures the link 'appears' as WAEC on the result slip
-            base_tag = '<base href="https://ghana.waecdirect.org/">'
-            
-            # Convert QR to Base64 so it never expires on your site
-            qr_uri = await page.evaluate("""() => {
-                const img = document.querySelector('img[src*="qrcode2"], img[src*="QRCode"]');
-                if (!img) return null;
-                const canvas = document.createElement('canvas');
-                canvas.width = img.naturalWidth;
-                canvas.height = img.naturalHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-                return canvas.toDataURL('image/png');
-            }""")
-
-            if qr_uri:
-                html = re.sub(r'src=["\'](qrcode2/[^"\']+\.png|QRCode\.ashx[^"\']+)["\']', f'src="{qr_uri}"', html)
-
-            return base_tag + html
-        finally:
-            await browser.close()
+# Enable CORS so your WordPress site can communicate with this bridge
+CORS(app)
 
 @app.route('/check', methods=['POST'])
 def proxy_waec():
+    session = requests.Session()
+    
+    # Authenticity headers to mimic a real browser session
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://ghana.waecdirect.org/index.htm",
+        "Origin": "https://ghana.waecdirect.org",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+    }
+
+    # Get data from the WordPress form
     data = request.form.to_dict()
+    
+    # Construct the payload required by WAEC's results.asp
+    payload = {
+        **data,
+        "ccandid": data.get("candid"),
+        "cexamyear": data.get("examyear"),
+        "referpage": "index.htm",
+        "submit": "Submit"
+    }
+
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        html = loop.run_until_complete(fetch_waec_manual_stealth(data))
-        loop.close()
+        # Step 1: Establish a session cookie by visiting the home page
+        session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
+
+        # Step 2: Post the credentials to fetch the results
+        waec_url = "https://ghana.waecdirect.org/results.asp"
+        response = session.post(waec_url, data=payload, headers=headers, timeout=45)
+        response.encoding = 'utf-8'
+        html = response.text
+
+        # --- BRANDING & AUTHENTICITY FIXES ---
+
+        # FIX 1: URL Destination Masking
+        # Inject the <base> tag so internal links/styles point to WAEC, not your site
+        base_tag = '<base href="https://ghana.waecdirect.org/">'
+        html = base_tag + html
+
+        # FIX 2: PERMANENT QR CODE
+        # Find the QR code source and convert it to Base64 so it doesn't expire
+        qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png|QRCode\.ashx[^"\']+)["\']', html)
+        
+        if qr_match:
+            qr_relative_url = qr_match.group(1)
+            qr_full_url = f"https://ghana.waecdirect.org/{qr_relative_url}"
+            
+            try:
+                # Download the image and encode it
+                img_res = session.get(qr_full_url, headers=headers, timeout=10)
+                if img_res.status_code == 200:
+                    b64_img = base64.b64encode(img_res.content).decode('utf-8')
+                    data_uri = f"data:image/png;base64,{b64_img}"
+                    html = html.replace(qr_relative_url, data_uri)
+            except Exception:
+                # Fallback: if QR download fails, the <base> tag still helps it load
+                pass 
+
         return Response(html, mimetype='text/html')
+
     except Exception as e:
-        return f"Bridge Error: {type(e).__name__} - {str(e)}", 500
+        # Returns a clean error message to your WordPress frontend
+        return f"Bridge Error: {str(e)}", 500
 
 if __name__ == "__main__":
+    # Ensure the app binds to the port provided by Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
