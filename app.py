@@ -5,8 +5,8 @@ from flask import Flask, request, Response
 from flask_cors import CORS
 from playwright.async_api import async_playwright
 
-# SPECIFIC IMPORT: This avoids the "module" naming conflict
-from playwright_stealth import stealth_async, stealth
+# FIX: Import ONLY 'stealth'. This resolves the ImportError from Screenshot 2026-05-12 at 18-54-40
+from playwright_stealth import stealth
 
 app = Flask(__name__)
 CORS(app) 
@@ -22,20 +22,13 @@ async def fetch_waec_stealth(payload):
         )
         page = await context.new_page()
         
-        # FINAL STEALTH FIX: Try one, then the other directly
-        try:
-            await stealth_async(page)
-        except (NameError, TypeError, AttributeError):
-            try:
-                await stealth(page)
-            except Exception as e:
-                print(f"Stealth could not be applied: {e}")
+        # APPLY STEALTH: Use the direct function call
+        await stealth(page)
 
         try:
-            # Your navigation logic
+            # Navigation and Form Filling
             await page.goto("https://ghana.waecdirect.org/index.htm", wait_until="networkidle", timeout=60000)
             
-            # Fill form...
             await page.fill('input[name="candid"]', payload.get("candid", ""))
             await page.select_option('select[name="examyear"]', payload.get("examyear", ""))
             await page.select_option('select[name="examtype"]', payload.get("examtype", "01"))
@@ -45,8 +38,28 @@ async def fetch_waec_stealth(payload):
             await page.click('input[id="Submit"]')
             await page.wait_for_load_state("networkidle", timeout=60000)
 
-            # QR Code and HTML logic...
+            # Capture Content
             html = await page.content()
-            return html
+            
+            # Injection to show the WAEC URL destination in the result slip
+            # This helps the slip look authentic
+            base_tag = '<base href="https://ghana.waecdirect.org/">'
+            return base_tag + html
         finally:
             await browser.close()
+
+@app.route('/check', methods=['POST'])
+def proxy_waec():
+    data = request.form.to_dict()
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        html = loop.run_until_complete(fetch_waec_stealth(data))
+        loop.close()
+        return Response(html, mimetype='text/html')
+    except Exception as e:
+        return f"Bridge Error: {str(e)}", 500
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
