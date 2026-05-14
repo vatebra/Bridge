@@ -7,39 +7,36 @@ from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-# Simple in-memory storage for frozen sessions
-# In production, use a database or Redis
-frozen_sessions = {}
+# Using a dictionary to act as a 'Session Vault'
+session_vault = {}
 
 @app.route('/check', methods=['POST'])
 def proxy_waec():
     session = requests.Session()
     data = request.form.to_dict()
     
-    # Use Index Number + Year + PIN as a unique key for freezing
-    session_key = f"{data.get('candid')}_{data.get('examyear')}_{data.get('pin')}"
+    # Unique ID for the student's specific result
+    student_id = f"{data.get('candid')}_{data.get('examyear')}"
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": "https://ghana.waecdirect.org/index.htm",
-        "Origin": "https://ghana.waecdirect.org",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        "Origin": "https://ghana.waecdirect.org"
     }
 
     try:
-        # --- FREEZING LOGIC START ---
-        # Check if we have a "frozen" ViewState and Cookies for this specific student
-        if session_key in frozen_sessions:
-            frozen_data = frozen_sessions[session_key]
-            viewstate_val = frozen_data['viewstate']
-            session.cookies.update(frozen_data['cookies'])
+        # 1. THE "ANYTIME" REPLAY CHECK
+        # If we already have a 'frozen' state for this student, try to use it first
+        if student_id in session_vault:
+            frozen_state = session_vault[student_id]
+            viewstate_val = frozen_state['viewstate']
+            session.cookies.update(frozen_state['cookies'])
         else:
-            # Step 1: Establish fresh Session & Capture initial ViewState
+            # 2. FRESH HANDSHAKE
+            # If it's a new check, get a fresh ViewState from the homepage
             init_res = session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
             soup = BeautifulSoup(init_res.text, 'html.parser')
-            vs_input = soup.find("input", {"id": "__VIEWSTATE"})
-            viewstate_val = vs_input['value'] if vs_input else ""
-        # --- FREEZING LOGIC END ---
+            viewstate_val = soup.find("input", {"id": "__VIEWSTATE"})['value']
 
         payload = {
             "__VIEWSTATE": viewstate_val,
@@ -50,24 +47,24 @@ def proxy_waec():
             "submit": "Submit"
         }
 
-        # Step 2: Post to get results
+        # 3. RETRIEVE RESULT
         waec_url = "https://ghana.waecdirect.org/results.asp"
         response = session.post(waec_url, data=payload, headers=headers, timeout=45)
         response.encoding = 'utf-8'
         html = response.text
 
-        # --- CAPTURE SUCCESSFUL STATE ---
-        # If results are found, "freeze" this viewstate for the next 20 mins
-        if "Result Details" in html and session_key not in frozen_sessions:
-            soup_result = BeautifulSoup(html, 'html.parser')
-            new_vs = soup_result.find("input", {"id": "__VIEWSTATE"})
-            if new_vs:
-                frozen_sessions[session_key] = {
-                    'viewstate': new_vs['value'],
+        # 4. FREEZE FOR LATER
+        # If the result is successful, save the ViewState to allow 'Anytime' access
+        if "Result Details" in html:
+            res_soup = BeautifulSoup(html, 'html.parser')
+            current_vs = res_soup.find("input", {"id": "__VIEWSTATE"})
+            if current_vs:
+                session_vault[student_id] = {
+                    'viewstate': current_vs['value'],
                     'cookies': session.cookies.get_dict()
                 }
 
-        # Step 3: HARDEN THE QR CODE (Loophole Fix remains the same)
+        # 5. HARDEN QR CODE (Base64)
         qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
         if qr_match:
             qr_relative_url = qr_match.group(1)
@@ -76,10 +73,8 @@ def proxy_waec():
                 img_res = session.get(qr_full_url, headers=headers, timeout=10)
                 if img_res.status_code == 200:
                     b64_img = base64.b64encode(img_res.content).decode('utf-8')
-                    data_uri = f"data:image/png;base64,{b64_img}"
-                    html = html.replace(qr_relative_url, data_uri)
-            except Exception:
-                pass
+                    html = html.replace(qr_relative_url, f"data:image/png;base64,{b64_img}")
+            except: pass
 
         return Response(html, mimetype='text/html')
 
