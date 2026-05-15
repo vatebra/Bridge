@@ -3,57 +3,40 @@ import re
 import base64
 from flask import Flask, request, Response
 import requests
-from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
 
-@app.route('/check', methods=['POST', 'OPTIONS'])
+@app.route('/check', methods=['POST'])
 def proxy_waec():
-    if request.method == 'OPTIONS':
-        return Response('', headers={
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type',
-        })
-    
     session = requests.Session()
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": "https://ghana.waecdirect.org/index.htm",
         "Origin": "https://ghana.waecdirect.org",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
     }
 
     data = request.form.to_dict()
-    
     payload = {
-        'candid': data.get('candid', ''),
-        'examyear': data.get('examyear', ''),
-        'examtype': data.get('examtype', ''),
-        'serial': data.get('serial', ''),
-        'pin': data.get('pin', ''),
-        'ccandid': data.get('candid', ''),
-        'cexamyear': data.get('examyear', ''),
-        'referpage': 'index.htm',
-        'submit': 'Submit'
+        **data,
+        "ccandid": data.get("candid"),
+        "cexamyear": data.get("examyear"),
+        "referpage": "index.htm",
+        "submit": "Submit"
     }
 
     try:
-        # Get session cookie
+        # Step 1: Establish Session
         session.get("https://ghana.waecdirect.org/index.htm", headers=headers, timeout=15)
-        
-        # Post to get results
-        response = session.post("https://ghana.waecdirect.org/results.asp", data=payload, headers=headers, timeout=45)
+
+        # Step 2: Post to get results
+        waec_url = "https://ghana.waecdirect.org/results.asp"
+        response = session.post(waec_url, data=payload, headers=headers, timeout=45)
         response.encoding = 'utf-8'
         html = response.text
 
-        # Check for error
-        if "Invalid" in html or "login again" in html.lower():
-            return Response("Invalid credentials. Please check your Index Number, Serial, and PIN.", status=400)
-
-        # Embed QR code as base64
+        # Step 3: HARDEN THE QR CODE (The Loophole Fix)
         qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
         
         if qr_match:
@@ -61,23 +44,23 @@ def proxy_waec():
             qr_full_url = f"https://ghana.waecdirect.org/{qr_relative_url}"
             
             try:
+                # Download the actual image bytes
                 img_res = session.get(qr_full_url, headers=headers, timeout=10)
                 if img_res.status_code == 200:
+                    # Convert image to Base64
                     b64_img = base64.b64encode(img_res.content).decode('utf-8')
                     data_uri = f"data:image/png;base64,{b64_img}"
+                    
+                    # Replace the dynamic URL with the permanent Base64 string
                     html = html.replace(qr_relative_url, data_uri)
             except Exception:
-                pass
+                pass # If QR download fails, keep original HTML
 
-        return Response(html, mimetype='text/html', headers={'Access-Control-Allow-Origin': '*'})
+        # Return the modified "Permanent" HTML to WordPress
+        return Response(html, mimetype='text/html')
 
     except Exception as e:
-        return Response(f"Bridge Error: {str(e)}", status=500)
-
-@app.route('/')
-@app.route('/health')
-def health():
-    return {"status": "healthy", "message": "WAEC Proxy is running", "endpoint": "/check"}
+        return f"Bridge Error: {str(e)}", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
