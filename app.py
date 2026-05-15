@@ -37,7 +37,6 @@ def proxy_waec():
         html = response.text
 
         # Step 3: HARDEN THE QR CODE (The Loophole Fix)
-        # Find the QR code path (either /qrcode2/... or QRCode.ashx)
         qr_match = re.search(r'src=["\'](qrcode2/[^"\']+\.png)["\']', html)
         
         if qr_match:
