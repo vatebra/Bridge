@@ -1,4 +1,4 @@
-// Cloudflare Worker for WAEC Result Proxy
+// src/index.js - Cloudflare Worker for WAEC Result Proxy
 
 export default {
   async fetch(request) {
@@ -13,9 +13,25 @@ export default {
       });
     }
 
-    // Only accept POST requests
+    const url = new URL(request.url);
+    
+    // Handle root path - show status
+    if (url.pathname === '/' && request.method === 'GET') {
+      return new Response(JSON.stringify({ status: 'WAEC Proxy is running', endpoint: '/check' }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Only accept POST requests to /check
+    if (url.pathname !== '/check') {
+      return new Response(JSON.stringify({ error: 'Not found. Use POST /check' }), { 
+        status: 404,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
     if (request.method !== 'POST') {
-      return new Response(JSON.stringify({ error: 'Method not allowed' }), { 
+      return new Response(JSON.stringify({ error: 'Method not allowed. Use POST' }), { 
         status: 405,
         headers: { 'Content-Type': 'application/json' }
       });
