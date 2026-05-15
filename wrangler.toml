@@ -1,4 +1,4 @@
 name = "waec-bridge"
-main = "app.py"
+main = "src/entry.py"
 compatibility_date = "2026-05-15"
 compatibility_flags = [ "python_workers" ]
