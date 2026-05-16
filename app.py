@@ -7,11 +7,39 @@ import requests
 
 app = Flask(__name__)
 
+# SECURITY PARITY: YOUR PRODUCTION GOOGLE RECAPTCHA SECRET KEY
+RECAPTCHA_SECRET_KEY = "6LeH1ugsAAAAALZCHqjuHEP44kSGqAv4F9f_Cf-g"
+
 @app.route('/check', methods=['POST'])
 def proxy_waec():
+    # Extract structural arguments from your WordPress AJAX client
+    data = request.form.to_dict()
+    captcha_token = data.get("captcha_token")
+    
+    # STEP 1: VERIFY TOKEN ENVELOPE AGAINST GOOGLE SECURITY ROUTERS
+    if not captcha_token:
+        return "Security Check Failed: Missing Captcha Token.", 400
+        
+    try:
+        verify_res = requests.post(
+            "https://www.google.com/recaptcha/api/siteverify",
+            data={
+                "secret": RECAPTCHA_SECRET_KEY,
+                "response": captcha_token
+            },
+            timeout=10
+        ).json()
+        
+        # Drop execution sequence immediately if verification fails
+        if not verify_res.get("success"):
+            return "Security Check Failed: Invalid Captcha Verification.", 400
+            
+    except Exception as e:
+        return f"Security Gateway Error: Unable to verify Captcha ({str(e)})", 500
+
+    # STEP 2: ORCHESTRATE SESSION CONTEXT AGAINST THE PORTAL HOST
     session = requests.Session()
     
-    # Sophisticated browser identity rotation to ensure smooth tracking
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
@@ -26,54 +54,56 @@ def proxy_waec():
         "Connection": "keep-alive"
     }
 
-    # Extract clean parameters from incoming WordPress POST request
-    data = request.form.to_dict()
     index_num = data.get("index_number")
     
-    # Map incoming clean keys to the exact form requirements from eresults HTML
+    # Remap custom inputs to mirror structural DOM expectations exactly
     payload = {
         "form-indexnum": index_num,
-        "form-cindexnum": index_num,                  # Programmatic mirroring loophole
-        "form-examtype": data.get("exam_type"),        # Code strings: BECE, WASS, etc.
+        "form-cindexnum": index_num,                  # Cloning loophole shortcut
+        "form-examtype": data.get("exam_type"),        
         "form-examyear": data.get("exam_year"),
         "form-csn": data.get("serial"),
         "form-pin": data.get("pin"),
-        "g-recaptcha-response": data.get("captcha_token")  # Pass frontend resolved token
+        "g-recaptcha-response": captcha_token         
     }
 
     try:
-        # Step 1: Establish Cookie State against the new portal
+        # Establish structural session boundaries and trace tracking cookies
         session.get("https://eresults.waecgh.org/", headers=headers, timeout=15)
 
-        # Step 2: Post to the precise search router endpoint
+        # Dispatch search parameters to processing core controller
         waec_url = "https://eresults.waecgh.org/Home/searcheresult"
         response = session.post(waec_url, data=payload, headers=headers, timeout=45)
         response.encoding = 'utf-8'
         html = response.text
 
-        # Step 3: HARDEN THE QR CODE (The Loophole Fix)
-        # Keeps original matching logic to look for the image path and bake it into Base64
+        # STEP 3: CONVERT RELATIVE ASSET REFERENCES TO ABSOLUTE WAEC CDN LINKS
+        html = html.replace('href="assets/', 'href="https://eresults.waecgh.org/assets/')
+        html = html.replace('href="/assets/', 'href="https://eresults.waecgh.org/assets/')
+        html = html.replace('src="assets/', 'src="https://eresults.waecgh.org/assets/')
+        html = html.replace('src="/assets/', 'src="https://eresults.waecgh.org/assets/')
+
+        # STEP 4: INTERCEPT AND HARDEN RESPONSIVE QR CODE SLOTS INTO BASE64 IMAGES
         qr_match = re.search(r'src=["\'](assets/img/[^"\']+\.png)["\']|src=["\'](qrcode2/[^"\']+\.png)["\']', html)
         
         if qr_match:
-            # Capture whichever matching group successfully trapped the image path
             qr_relative_url = qr_match.group(1) or qr_match.group(2)
-            qr_full_url = f"https://eresults.waecgh.org/{qr_relative_url}"
+            
+            if "https://" not in qr_relative_url:
+                qr_full_url = f"https://eresults.waecgh.org/{qr_relative_url.replace('https://eresults.waecgh.org/', '')}"
+            else:
+                qr_full_url = qr_relative_url
             
             try:
-                # Download the actual image bytes mid-air
                 img_res = session.get(qr_full_url, headers=headers, timeout=10)
                 if img_res.status_code == 200:
-                    # Convert image to Base64 data URI
                     b64_img = base64.b64encode(img_res.content).decode('utf-8')
                     data_uri = f"data:image/png;base64,{b64_img}"
-                    
-                    # Replace dynamic source reference with permanent string
                     html = html.replace(qr_relative_url, data_uri)
             except Exception:
-                pass # If dynamic download slips, output original markup safely
+                pass 
 
-        # Return the optimized, modified HTML payload to WordPress
+        # Return pristine, stylized results markup directly to client
         return Response(html, mimetype='text/html')
 
     except Exception as e:
